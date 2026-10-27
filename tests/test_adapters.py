@@ -66,4 +66,14 @@ class Adapters(unittest.TestCase):
   with patch.object(subprocess,'run',return_value=Mock(returncode=0,stdout='')) as run:
    adapters.snmp({'host':'printer.local','username':'user','authPassword':'auth-secret','privPassword':'priv-secret'},'.1.3.6.1.2.1.43.11.1.1',walk=True,indexed=True)
    self.assertIn('-Onq',run.call_args.args[0]);self.assertEqual(run.call_args.args[0][0],'snmpwalk')
+ def test_snmp_context_passed_to_command(self):
+  config={'host':'printer.local','username':'user','authPassword':'auth-secret','privPassword':'priv-secret','contextName':'Jetdirect'}
+  with patch.object(subprocess,'run',return_value=Mock(returncode=0,stdout='15')) as run:
+   adapters.snmp(config,'.1.3.6.1.2.1.43.11.1.1',walk=True,indexed=True)
+   args=run.call_args.args[0];self.assertEqual(args[1:3],['-n','Jetdirect']);self.assertNotIn('auth-secret',' '.join(args))
+ def test_snmp_context_validation(self):
+  config={'kind':'printer','host':'printer.local','username':'user','authPassword':'auth-secret','privPassword':'priv-secret'}
+  self.assertEqual(adapters.validate({**config,'contextName':'Jetdirect'})['contextName'],'Jetdirect')
+  for context in [None,42,'x'*256,'bad\ncontext']:
+   with self.subTest(context=context),self.assertRaises(ValueError):adapters.validate({**config,'contextName':context})
 if __name__=='__main__':unittest.main()

@@ -132,3 +132,7 @@ Add a device with type **Printer**, then open **API / SNMP connection → Printe
 Set **Low supply warning** to your desired percentage (default 20%; 0 disables supply warnings), save, and select **Poll now**. Automatic polling runs every minute. Device details show each supply description and its remaining percentage; the inventory shows the lowest known consumed supply level. Percentages come from reported percentage units or valid level/capacity pairs. Unknown, negative sentinel, missing, or invalid measurements remain unavailable. Waste receptacles display remaining space but do not trigger low-ink warnings.
 
 At or below the threshold, a consumed supply opens a warning naming the supply and remaining percentage. Repeated polls do not resend the same open incident. Recovery closes the incident; maintenance silences it. Alerts appear in the dashboard; email/webhook warnings require configuring **Settings → Configure monitoring → Notification delivery**. Existing one-incident-per-device behavior applies. Monitoring is read-only and offers no printer management commands. Printer hardware has not yet been validated.
+
+### HP SNMP context
+
+Some HP printers require the SNMP context name `Jetdirect` to grant access to their MIB objects. Set **SNMP context name** in the connection form when the device requires a non-default context. The HP Color LaserJet Pro MFP 3303 was verified to return four supplies using `Jetdirect`; an empty context returned `authorizationError`. Other devices can leave this field blank.

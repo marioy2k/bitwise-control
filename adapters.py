@@ -114,6 +114,7 @@ def snmp(c,oid,walk=False,value=None,indexed=False):
   os.chmod(conf,0o600)
   target='udp:'+c['host']+':'+str(c.get('port',161))
   command=['snmpset' if value is not None else ('snmpwalk' if walk else 'snmpget'),'-v','3','-t','3','-r','0','-Onq' if indexed else '-Oqv','-Ot',target,oid]
+  if c.get('contextName'):command[1:1]=['-n',c['contextName']]
   if value is not None:command+=['i',str(value)]
   try:
    r=subprocess.run(command,env={**os.environ,'SNMPCONFPATH':folder,'MIBS':''},capture_output=True,text=True,timeout=8)
@@ -178,7 +179,7 @@ SECRETS={'tokenSecret','password','apiKey','authPassword','privPassword'}
 def validate(config):
  kind=config.get('kind')
  if kind not in POLL:raise ValueError('Choose Proxmox, MikroTik, UniFi, SNMPv3, or Printer SNMPv3.')
- allowed={'kind','url','caPem','node','target','vmid','tokenId','tokenSecret','username','password','siteId','deviceId','apiKey','host','port','authPassword','privPassword','temperatureOid','temperatureDivisor','allowControl','supplyThreshold'}
+ allowed={'kind','url','caPem','node','target','vmid','tokenId','tokenSecret','username','password','siteId','deviceId','apiKey','host','port','authPassword','privPassword','temperatureOid','temperatureDivisor','allowControl','supplyThreshold','contextName'}
  c={k:v for k,v in config.items() if k in allowed}
  for key,value in c.items():
   if isinstance(value,str) and (len(value)>16384 or '\x00' in value or ('\n' in value and key!='caPem') or '\r' in value):raise ValueError('Invalid '+key+' value.')
@@ -197,6 +198,7 @@ def validate(config):
   if c.get('target','node') not in ('node','lxc','qemu'):raise ValueError('Choose node, lxc, or qemu.')
   if c.get('target') in ('lxc','qemu') and (type(c.get('vmid'))!=int or not 100<=c['vmid']<=999999999):raise ValueError('Enter a valid VM/container ID.')
  if kind in ('snmp','printer'):
+  if 'contextName' in c and (not isinstance(c['contextName'],str) or len(c['contextName'])>255):raise ValueError('SNMP context must be text of at most 255 characters.')
   if any(x in c['host'] for x in [' ','/','\n',':']):raise ValueError('Use an IPv4 address or hostname for SNMP.')
   if any(len(c[k])<8 for k in ['authPassword','privPassword']):raise ValueError('SNMPv3 passphrases need at least 8 characters.')
   if type(c.get('port',161))!=int or not 1<=c.get('port',161)<=65535:raise ValueError('Invalid SNMP port.')
