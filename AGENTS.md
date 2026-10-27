@@ -1,0 +1,7 @@
+# Bitwise Control development
+
+The user wants completed changes updated in both `marioy2k/bitwise-control` on GitHub and the running application at `10.10.111.49:8080`. Keep these in sync after each completed release. SSH uses root and the already configured local key. Nginx was explicitly removed; retain the standalone Python/systemd deployment.
+
+Run isolated backend tests, Python compilation, JavaScript syntax checks, and relevant browser checks. Do not run disruptive device operations or send test notifications to real recipients without a specific user request. Preserve inventory, users, credentials, metric history, and backups during updates. Never commit passwords, tokens, auth.json, SQLite files, private keys, or backup archives. Device integrations must report unavailable data and errors honestly; do not add simulated metrics or controls.
+
+Deploy tested source with deploy/install.sh, preserve existing authentication, record the deployed GitHub commit in /opt/bitwise-control/REVISION, and verify health, authenticated access, and representative files against the published source. The user deferred access to 10.10.111.39; do not install its agent until asked.

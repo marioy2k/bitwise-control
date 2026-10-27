@@ -3,10 +3,14 @@ set -eu
 [ "$(id -u)" = 0 ] || { echo 'Run as root.'; exit 1; }
 SOURCE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 command -v python3 >/dev/null
+if ! command -v snmpget >/dev/null 2>&1; then
+ apt-get update -qq
+ DEBIAN_FRONTEND=noninteractive apt-get install -y snmp
+fi
 getent passwd bitwise-control >/dev/null || useradd --system --no-create-home --shell /usr/sbin/nologin bitwise-control
 install -d -m 755 /opt/bitwise-control/dist
 install -d -m 700 -o bitwise-control -g bitwise-control /etc/bitwise-control /var/lib/bitwise-control
-install -m 644 "$SOURCE/server.py" "$SOURCE/agent.py" "$SOURCE/backup.py" /opt/bitwise-control/
+install -m 644 "$SOURCE/server.py" "$SOURCE/agent.py" "$SOURCE/adapters.py" "$SOURCE/notifications.py" "$SOURCE/backup.py" /opt/bitwise-control/
 install -m 644 "$SOURCE/dist/index.html" "$SOURCE/dist/login.html" "$SOURCE/dist/app.js" /opt/bitwise-control/dist/
 if [ ! -f /etc/bitwise-control/auth.json ]; then
  python3 - <<'PY'
