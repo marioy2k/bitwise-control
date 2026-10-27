@@ -1,7 +1,6 @@
-.env
-.env.*
-!.env.example
-node_modules/
 __pycache__/
-*.log
-.DS_Store
+*.pyc
+*.sqlite3*
+auth.json
+.env
+private/

@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily Bitwise Control database backup
+[Timer]
+OnCalendar=daily
+Persistent=true
+[Install]
+WantedBy=timers.target

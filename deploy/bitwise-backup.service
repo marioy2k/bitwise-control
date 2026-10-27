@@ -1,0 +1,12 @@
+[Unit]
+Description=Back up Bitwise Control database
+[Service]
+Type=oneshot
+User=bitwise-control
+Group=bitwise-control
+ExecStart=/usr/bin/python3 /opt/bitwise-control/backup.py
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bitwise-control
+ProtectHome=yes
+PrivateTmp=yes

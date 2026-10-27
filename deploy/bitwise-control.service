@@ -1,0 +1,18 @@
+[Unit]
+Description=Bitwise Control inventory and monitoring
+After=network.target
+[Service]
+User=bitwise-control
+Group=bitwise-control
+WorkingDirectory=/opt/bitwise-control
+ExecStart=/usr/bin/python3 /opt/bitwise-control/server.py
+Environment=BITWISE_DATA=/var/lib/bitwise-control
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bitwise-control /etc/bitwise-control
+ProtectHome=yes
+PrivateTmp=yes
+[Install]
+WantedBy=multi-user.target
