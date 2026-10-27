@@ -184,4 +184,44 @@ class API(unittest.TestCase):
    operator=self.account_client('operator',['Example']);self.assertEqual(self.request('/api/monitoring/test','POST',{'delivery':{'mode':'none'}},client=operator)[0],403)
    viewer=self.account_client('viewer',['Example'],username='viewer');self.assertEqual(self.request('/api/monitoring/test','POST',{'delivery':{'mode':'none'}},client=viewer)[0],403)
    send.assert_not_called()
+ def timed_notifications(self,reminders=5,summaries=5):
+  self.inventory();body={'rules':{'offlineSeconds':3600},'delivery':{'mode':'discord','discordUrl':'https://discord.com/api/webhooks/123456/secret','reminderMinutes':reminders,'summaryMinutes':summaries}}
+  self.assertEqual(self.request('/api/monitoring','POST',body)[0],200)
+ def test_alert_reminders_boundary_restart_and_recovery(self):
+  self.timed_notifications();now=app.time.time()
+  with patch.object(app.time,'time',return_value=now):app.record(1,{'cpu':95});app.incidents()
+  with app.connect() as c:c.execute("UPDATE outbox SET status='sent'")
+  app.init()
+  with patch.object(app.time,'time',return_value=now+299):app.incidents()
+  with app.connect() as c:self.assertEqual(c.execute("SELECT count(*) FROM outbox WHERE category='reminder'").fetchone()[0],0)
+  with patch.object(app.time,'time',return_value=now+300):app.incidents();app.incidents()
+  with app.connect() as c:self.assertEqual(c.execute("SELECT count(*) FROM outbox WHERE category='reminder'").fetchone()[0],1)
+  with patch.object(app.time,'time',return_value=now+600):app.incidents()
+  with app.connect() as c:self.assertEqual(c.execute("SELECT count(*) FROM outbox WHERE category='reminder'").fetchone()[0],1)
+  with patch.object(app.time,'time',return_value=now+601):app.record(1,{'cpu':10});app.incidents()
+  with app.connect() as c:
+   self.assertEqual(c.execute("SELECT status FROM outbox WHERE category='reminder'").fetchone()[0],'cancelled');self.assertEqual(c.execute('SELECT count(*) FROM incidents').fetchone()[0],0)
+ def test_summary_healthy_and_no_catchup_burst(self):
+  self.timed_notifications(reminders=0,summaries=10)
+  with app.connect() as c:last=float(c.execute("SELECT value FROM settings WHERE key='summary_last_queued'").fetchone()[0])
+  with patch.object(app.time,'time',return_value=last):app.record(1,{'cpu':10})
+  with patch.object(app.time,'time',return_value=last+599):app.status_summaries()
+  with app.connect() as c:self.assertEqual(c.execute("SELECT count(*) FROM outbox WHERE category='summary'").fetchone()[0],0)
+  with patch.object(app.time,'time',return_value=last+600):app.status_summaries();app.status_summaries()
+  with app.connect() as c:
+   row=c.execute("SELECT message FROM outbox WHERE category='summary'").fetchone();self.assertIn('0 offline',row[0]);self.assertIn('Online',row[0]);self.assertNotIn('secret',row[0])
+  app.init()
+  with patch.object(app.time,'time',return_value=last+3000):app.status_summaries();app.status_summaries()
+  with app.connect() as c:self.assertEqual(c.execute("SELECT count(*) FROM outbox WHERE category='summary'").fetchone()[0],2)
+ def test_reminder_maintenance_suppression(self):
+  self.timed_notifications();now=app.time.time();app.record(1,{'cpu':99});app.incidents()
+  with app.connect() as c:
+   state,_=app.load(c);state['devices'][0]['maintenanceUntil']=now+1000;app.store(c,state)
+  with patch.object(app.time,'time',return_value=now+600):app.incidents()
+  with app.connect() as c:
+   self.assertEqual(c.execute("SELECT count(*) FROM outbox WHERE category='reminder'").fetchone()[0],0);self.assertEqual(c.execute('SELECT count(*) FROM incidents').fetchone()[0],0)
+ def test_notification_schedule_validation(self):
+  for field in ['reminderMinutes','summaryMinutes']:
+   for invalid in [-1,1,6,True,'5',15]:
+    with self.subTest(field=field,value=invalid):self.assertEqual(self.request('/api/monitoring','POST',{'delivery':{'mode':'none',field:invalid}})[0],400)
 if __name__=='__main__':unittest.main()

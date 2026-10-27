@@ -146,3 +146,13 @@ Discord messages disable mentions and are limited to 2,000 characters. Webhook U
 ### Test notification delivery
 
 In **Settings → Configure monitoring**, choose a channel, fill in its settings, and click **Send test notification**. The test uses the form values and reuses saved secrets when their fields are blank. It sends one clearly labeled test message per selected channel and reports each result separately. Testing does not save settings or automatically retry. Select **Save monitoring settings** afterward to enable future incident and recovery messages. Only administrators can send tests, and each attempt appears in recent deliveries and the audit log. A sent result means the receiving service accepted the message; check email spam folders if needed.
+
+## Recurring notifications
+
+**Settings → Configure monitoring** provides two independent schedules: **Repeat unresolved alert reminders** and **Send status summaries**. Choose disabled, every 5 minutes, or every 10 minutes for each. Discord/SMTP destinations must be enabled and configured.
+
+Open alerts still notify immediately, and recovery notifies once. Reminders continue only while an incident is open and outside maintenance. Pending alert/reminder messages are cancelled when the incident recovers or enters maintenance; a channel with a pending alert/reminder does not accumulate more reminders for that device. Status summaries include healthy devices, offline/warning counts, and available supply levels. Summary and reminder timers persist across restarts, run on the 30-second monitoring cycle, and do not replay every missed interval after an outage. Both schedules are disabled by default until explicitly enabled. Tests send once and do not change schedules.
+
+## Windows security monitoring roadmap
+
+Windows security integration is planned, not installed in this release. A Windows agent could collect Microsoft Defender protection status and detected threats, selected Windows security events, and applicable missing updates through Windows Update Agent. These are monitoring signals, not a replacement antivirus engine or complete SIEM. Full software/CVE vulnerability coverage requires a supported vulnerability data source or platform, with its own access and licensing. Windows setup was deferred at the user's request.

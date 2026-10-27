@@ -44,6 +44,9 @@ def init():
   CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, time REAL NOT NULL, action TEXT NOT NULL, device TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS incidents(device INTEGER PRIMARY KEY, opened REAL NOT NULL, message TEXT NOT NULL);
   ''')
+  if 'last_notified' not in [row['name'] for row in c.execute('PRAGMA table_info(incidents)')]:c.execute('ALTER TABLE incidents ADD COLUMN last_notified REAL NOT NULL DEFAULT 0')
+  for column,definition in [('device','INTEGER'),('category',"TEXT NOT NULL DEFAULT ''")]:
+   if column not in [row['name'] for row in c.execute('PRAGMA table_info(outbox)')]:c.execute('ALTER TABLE outbox ADD COLUMN '+column+' '+definition)
   if 'channel' not in [row['name'] for row in c.execute('PRAGMA table_info(outbox)')]:c.execute("ALTER TABLE outbox ADD COLUMN channel TEXT NOT NULL DEFAULT ''")
   if 'actor' not in [row['name'] for row in c.execute('PRAGMA table_info(audit)')]:c.execute("ALTER TABLE audit ADD COLUMN actor TEXT NOT NULL DEFAULT 'system'")
   c.execute('INSERT OR IGNORE INTO inventory VALUES(1,0,?)',(json.dumps({'companies':[],'devices':[],'rules':[],'channels':{}}),))
@@ -61,9 +64,10 @@ def get_settings(c):
  row=c.execute("SELECT value FROM settings WHERE key='monitoring'").fetchone()
  return json.loads(row['value']) if row else {'rules':dict(notifications.DEFAULT_RULES),'delivery':{'mode':'none'}}
 
-def queue_notification(c,subject,message):
+def queue_notification(c,subject,message,device=None,category=''):
  for channel in notifications.channels(get_settings(c)['delivery']):
-  c.execute('INSERT INTO outbox(subject,message,created,channel) VALUES(?,?,?,?)',(subject,message,time.time(),channel))
+  if category=='reminder' and c.execute("SELECT 1 FROM outbox WHERE device=? AND channel=? AND status='pending' AND category IN ('alert','reminder')",(device,channel)).fetchone():continue
+  c.execute('INSERT INTO outbox(subject,message,created,channel,device,category) VALUES(?,?,?,?,?,?)',(subject,message,time.time(),channel,device,category))
 
 def deliver_notifications():
  with connect() as c:
@@ -175,14 +179,38 @@ def incidents():
     message='Printer supply low: '+', '.join(s['name']+' ('+str(s['percent'])+'% remaining)' for s in d['lowSupplies'])
    maintenance=d.get('maintenanceUntil',0)>now
    if maintenance:message=None
-   old=c.execute('SELECT message FROM incidents WHERE device=?',(d['id'],)).fetchone()
+   old=c.execute('SELECT message,last_notified,opened FROM incidents WHERE device=?',(d['id'],)).fetchone()
    if message:
-    c.execute('INSERT INTO incidents VALUES(?,?,?) ON CONFLICT(device) DO UPDATE SET message=excluded.message',(d['id'],now,message))
+    c.execute('INSERT INTO incidents(device,opened,message,last_notified) VALUES(?,?,?,?) ON CONFLICT(device) DO UPDATE SET message=excluded.message',(d['id'],now,message,now))
     if not old:
-     audit(c,'Alert opened: '+message,d['name']);queue_notification(c,'Bitwise alert: '+d['name'],d['company']+' / '+d['name']+' ('+d['ip']+'): '+message)
+     audit(c,'Alert opened: '+message,d['name']);queue_notification(c,'Bitwise alert: '+d['name'],d['company']+' / '+d['name']+' ('+d['ip']+'): '+message,d['id'],'alert')
+    else:
+     interval=state['monitoring']['delivery'].get('reminderMinutes',0)*60
+     if interval and now-max(old['last_notified'],old['opened'])>=interval:
+      queue_notification(c,'Bitwise reminder: '+d['name'],d['company']+' / '+d['name']+' ('+d['ip']+'): '+message,d['id'],'reminder')
+      c.execute('UPDATE incidents SET last_notified=? WHERE device=?',(now,d['id']))
    elif old:
+    c.execute("UPDATE outbox SET status='cancelled' WHERE device=? AND category IN ('alert','reminder') AND status='pending'",(d['id'],))
     c.execute('DELETE FROM incidents WHERE device=?',(d['id'],));audit(c,'Alert silenced for maintenance' if maintenance else 'Alert recovered',d['name'])
     if not maintenance:queue_notification(c,'Bitwise recovery: '+d['name'],d['company']+' / '+d['name']+' is reporting normally again.')
+
+def status_summaries():
+ state=view_state();now=time.time()
+ with LOCK,connect() as c:
+  delivery=get_settings(c)['delivery'];interval=delivery.get('summaryMinutes',0)*60
+  if not interval or not notifications.channels(delivery):return
+  row=c.execute("SELECT value FROM settings WHERE key='summary_last_queued'").fetchone()
+  last=float(row['value']) if row else now
+  if not row:
+   c.execute("INSERT INTO settings VALUES('summary_last_queued',?)",(str(now),));return
+  if now-last<interval:return
+  devices=state['devices'];lines=[f"{len(devices)} devices; {sum(d['status']=='Offline' for d in devices)} offline; {sum(d['status']=='Warning' for d in devices)} warnings; {len(state['incidents'])} open incidents."]
+  for d in devices[:50]:
+   detail=', '.join(s['name']+': '+(str(s['percent'])+'%' if s.get('percent') is not None else 'unavailable') for s in d.get('supplies',[]))
+   lines.append(d['company']+' / '+d['name']+': '+d['status']+(' (maintenance)' if d.get('maintenanceUntil',0)>now else '')+(' — '+detail if detail else ''))
+  if len(devices)>50:lines.append('Showing the first 50 devices; open the dashboard for the full inventory.')
+  queue_notification(c,'Bitwise status summary','\n'.join(lines),category='summary')
+  c.execute("UPDATE settings SET value=? WHERE key='summary_last_queued'",(str(now),))
 
 def poll_device(ident):
  try:
@@ -222,7 +250,7 @@ def run_action(ident,name,args):
 def monitor():
  while not STOP.wait(30):
   try:
-   incidents();deliver_notifications()
+   incidents();status_summaries();deliver_notifications()
    with LOCK,connect() as c:
     for row in c.execute('SELECT device FROM connections WHERE last_attempt<?',(time.time()-60,)):
      ident=row['device']
@@ -374,6 +402,7 @@ class Handler(BaseHTTPRequestHandler):
    body=self.body()
    with LOCK,connect() as c:
     previous=get_settings(c);settings=notifications.validate(body,previous)
+    if settings['delivery'].get('summaryMinutes',0)!=previous['delivery'].get('summaryMinutes',0):c.execute("INSERT INTO settings VALUES('summary_last_queued',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(str(time.time()),))
     if settings['delivery']!=previous['delivery']:c.execute("UPDATE outbox SET status='cancelled' WHERE status='pending'")
     c.execute("INSERT INTO settings VALUES('monitoring',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",(json.dumps(settings),));audit(c,'Monitoring rules and delivery settings updated')
    incidents();return self.reply(200,notifications.public(settings))

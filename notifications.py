@@ -23,6 +23,10 @@ def validate(body,previous):
   if value is not None:
    if key!='smtpPort' and (not isinstance(value,str) or len(value)>4096 or '\n' in value or '\r' in value):raise ValueError('Invalid notification setting: '+key)
    out['delivery'][key]=value
+ for key in ('reminderMinutes','summaryMinutes'):
+  value=delivery.get(key,previous.get('delivery',{}).get(key,0))
+  if type(value)!=int or value not in (0,5,10):raise ValueError('Choose disabled, 5 minutes, or 10 minutes for '+key)
+  out['delivery'][key]=value
  out['delivery']['mode']=mode
  if mode in ('email','both'):
   d=out['delivery'];port=d.get('smtpPort',587)
