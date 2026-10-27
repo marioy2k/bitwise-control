@@ -121,4 +121,29 @@ class API(unittest.TestCase):
   self.inventory();data=self.request('/api/state')[1];data['devices'][0]['maintenanceUntil']=app.time.time()+3600;self.assertEqual(self.request('/api/state','PUT',data)[0],200)
   app.record(1,{'cpu':99});app.incidents();self.assertEqual(self.request('/api/state')[1]['incidents'],[])
   data=self.request('/api/state')[1];data['devices'][0]['maintenanceUntil']=0;self.request('/api/state','PUT',data);app.incidents();self.assertEqual(len(self.request('/api/state')[1]['incidents']),1)
+ def printer_connection(self,threshold=20):
+  config={'kind':'printer','host':'printer.local','username':'monitor','authPassword':'auth-secret','privPassword':'priv-secret','supplyThreshold':threshold}
+  self.assertEqual(self.request('/api/integration','POST',{'id':1,'config':config})[0],200)
+ def test_printer_alert_boundary_dedup_and_recovery(self):
+  self.inventory();self.printer_connection()
+  with app.connect() as c:c.execute("INSERT INTO settings VALUES('monitoring',?)",(json.dumps({'rules':dict(app.notifications.DEFAULT_RULES),'delivery':{'mode':'webhook'}}),))
+  def sample(percent):
+   app.record(1,{'supplies':[{'id':'1.1','name':'Black toner','class':3,'percent':percent},{'id':'1.2','name':'Waste','class':4,'percent':1}]});app.incidents()
+  sample(20);state=app.view_state();self.assertEqual(state['devices'][0]['status'],'Warning');self.assertIn('Black toner (20% remaining)',state['incidents'][0]['message']);sample(19)
+  with app.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM outbox').fetchone()[0],1)
+  sample(21);self.assertEqual(app.view_state()['incidents'],[])
+  with app.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM outbox').fetchone()[0],2)
+ def test_printer_disabled_unknown_and_maintenance(self):
+  self.inventory();self.printer_connection(0)
+  app.record(1,{'supplies':[{'id':'1.1','name':'Black','class':3,'percent':0}]});app.incidents();self.assertEqual(app.view_state()['incidents'],[])
+  self.printer_connection();app.record(1,{'supplies':[{'id':'1.1','name':'Black','class':3,'percent':None}]});app.incidents();self.assertEqual(app.view_state()['incidents'],[])
+  data=self.request('/api/state')[1];data['devices'][0]['maintenanceUntil']=app.time.time()+3600;self.request('/api/state','PUT',data)
+  app.record(1,{'supplies':[{'id':'1.1','name':'Black','class':3,'percent':0}]});app.incidents();self.assertEqual(app.view_state()['incidents'],[])
+ def test_printer_poll_api_and_saved_threshold(self):
+  self.inventory();self.printer_connection(15)
+  with patch.object(app.adapters,'poll',return_value={'source':'Printer SNMPv3','supplies':[{'id':'1.1','name':'Cyan','class':3,'percent':10}]}):
+   code,state,_=self.request('/api/poll','POST',{'id':1});self.assertEqual(code,200);self.assertEqual(state['devices'][0]['status'],'Warning');self.assertEqual(state['devices'][0]['integration']['supplyThreshold'],15)
+  config={'kind':'printer','host':'printer.local','username':'monitor','supplyThreshold':30}
+  self.assertEqual(self.request('/api/integration','POST',{'id':1,'config':config})[0],200)
+  with app.connect() as c:self.assertEqual(json.loads(c.execute('SELECT config FROM connections').fetchone()[0])['authPassword'],'auth-secret')
 if __name__=='__main__':unittest.main()

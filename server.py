@@ -79,7 +79,7 @@ def view_state(user=None):
   state['notificationStatus']=[dict(r) for r in c.execute('SELECT id,subject,status,attempts,created FROM outbox ORDER BY id DESC LIMIT 10')]
   for d in state['devices']:
    sample=c.execute('SELECT time,data FROM samples WHERE device=? ORDER BY time DESC LIMIT 1',(d['id'],)).fetchone()
-   d.update(cpu=None,memory=None,temp=None,uptime=0,disk=None,lastSeen=None,status='Pending',poe=[])
+   d.update(cpu=None,memory=None,temp=None,uptime=0,disk=None,lastSeen=None,status='Pending',poe=[],supplies=[])
    connection=c.execute('SELECT config,last_error,last_attempt FROM connections WHERE device=?',(d['id'],)).fetchone()
    d['integration']=adapters.public(json.loads(connection['config'])) if connection else None
    d['connectionError']=connection['last_error'] if connection else None
@@ -88,6 +88,11 @@ def view_state(user=None):
    if d.get('operationalOnline') is False:d['status']='Offline'
    if d['connectionError']:d['status']='Offline'
    if d['status']=='Online' and any(rules.get('temperature' if k=='temp' else k,0)>0 and d.get(k) is not None and d[k]>rules['temperature' if k=='temp' else k] for k in ('cpu','memory','disk','temp')):d['status']='Warning'
+   d['lowSupplies']=[]
+   if d['integration'] and d['integration']['kind']=='printer':
+    threshold=d['integration'].get('supplyThreshold',20)
+    d['lowSupplies']=[s for s in d['supplies'] if threshold>0 and s.get('class')==3 and s.get('percent') is not None and s['percent']<=threshold]
+    if d['status']=='Online' and d['lowSupplies']:d['status']='Warning'
   state['logs']=[{'time':time.strftime('%Y-%m-%d %H:%M:%S',time.localtime(r['time'])),'action':r['action'],'actor':r['actor'],'device':r['device'],'company':''} for r in c.execute('SELECT * FROM audit ORDER BY id DESC LIMIT 500')]
   state['incidents']=[dict(r) for r in c.execute('SELECT * FROM incidents ORDER BY opened DESC')]
   state['revision']=rev;state['serverTime']=time.time()
@@ -160,6 +165,8 @@ def incidents():
  with LOCK,connect() as c:
   for d in state['devices']:
    message=('Device connection failed' if d.get('connectionError') else 'Device stopped reporting') if d['status']=='Offline' else ('Resource monitoring threshold exceeded' if d['status']=='Warning' else None)
+   if d['status']=='Warning' and d.get('lowSupplies'):
+    message='Printer supply low: '+', '.join(s['name']+' ('+str(s['percent'])+'% remaining)' for s in d['lowSupplies'])
    maintenance=d.get('maintenanceUntil',0)>now
    if maintenance:message=None
    old=c.execute('SELECT message FROM incidents WHERE device=?',(d['id'],)).fetchone()

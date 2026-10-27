@@ -124,3 +124,11 @@ The application code and integrations are published. Hardware validation remains
 - Notification delivery remains disabled until a real destination is configured.
 
 When device work resumes, import or create the company/device inventory, establish authorized access, configure the relevant connection in the app, and verify real measurements, history, and incident recovery. Do not use a successful TCP port check as proof of authenticated monitoring. Reboots, upgrades, and PoE changes require separate explicit test instructions. Enter secrets in the application connection forms; never add them to the repository or commit history.
+
+## Printer ink and toner monitoring
+
+Add a device with type **Printer**, then open **API / SNMP connection → Printer supplies (SNMPv3)**. Enable SNMPv3 authPriv (SHA/AES) on the network printer and enter its host, UDP port (default 161), security username, and passphrases. Use a read-only account with access to the standard [RFC 3805 Printer-MIB](https://www.rfc-editor.org/rfc/rfc3805.html) supplies table. Printers without SNMPv3 or Printer-MIB support are not supported by this connection.
+
+Set **Low supply warning** to your desired percentage (default 20%; 0 disables supply warnings), save, and select **Poll now**. Automatic polling runs every minute. Device details show each supply description and its remaining percentage; the inventory shows the lowest known consumed supply level. Percentages come from reported percentage units or valid level/capacity pairs. Unknown, negative sentinel, missing, or invalid measurements remain unavailable. Waste receptacles display remaining space but do not trigger low-ink warnings.
+
+At or below the threshold, a consumed supply opens a warning naming the supply and remaining percentage. Repeated polls do not resend the same open incident. Recovery closes the incident; maintenance silences it. Alerts appear in the dashboard; email/webhook warnings require configuring **Settings → Configure monitoring → Notification delivery**. Existing one-incident-per-device behavior applies. Monitoring is read-only and offers no printer management commands. Printer hardware has not yet been validated.

@@ -104,7 +104,7 @@ def ui_action(c,action,args):
  if action=='config_backup':return ui(c,ui_path(c))
  raise AdapterError('This operation is not exposed by the supported official UniFi API.')
 
-def snmp(c,oid,walk=False,value=None):
+def snmp(c,oid,walk=False,value=None,indexed=False):
  if not re.fullmatch(r'\.?[0-9]+(?:\.[0-9]+)+',oid):raise AdapterError('Invalid numeric SNMP OID.')
  with tempfile.TemporaryDirectory(prefix='bitwise-snmp-') as folder:
   def q(s):return '"'+str(s).replace('\\','\\\\').replace('"','\\"')+'"'
@@ -113,7 +113,7 @@ def snmp(c,oid,walk=False,value=None):
   with open(conf,'w') as f:f.write('\n'.join(settings)+'\n')
   os.chmod(conf,0o600)
   target='udp:'+c['host']+':'+str(c.get('port',161))
-  command=['snmpset' if value is not None else ('snmpwalk' if walk else 'snmpget'),'-v','3','-t','3','-r','0','-Oqv','-Ot',target,oid]
+  command=['snmpset' if value is not None else ('snmpwalk' if walk else 'snmpget'),'-v','3','-t','3','-r','0','-Onq' if indexed else '-Oqv','-Ot',target,oid]
   if value is not None:command+=['i',str(value)]
   try:
    r=subprocess.run(command,env={**os.environ,'SNMPCONFPATH':folder,'MIBS':''},capture_output=True,text=True,timeout=8)
@@ -140,28 +140,53 @@ def snmp_poll(c):
   except (AdapterError,ValueError):pass
  return out
 
+# RFC 3805 Printer-MIB: retain the full (device, supply) index when joining columns.
+def printer_poll(c):
+ root='.1.3.6.1.2.1.43.11.1.1'
+ raw=snmp(c,root,walk=True,indexed=True)
+ rows={}
+ for line in raw.splitlines():
+  match=re.fullmatch(r'\.?1\.3\.6\.1\.2\.1\.43\.11\.1\.1\.(4|5|6|7|8|9)\.(\d+\.\d+)\s+(.+)',line.strip())
+  if not match:continue
+  col,index,value=match.groups();rows.setdefault(index,{})[int(col)]=value.strip().strip('"')
+ supplies=[]
+ for index,row in sorted(rows.items()):
+  def number(col):
+   try:return int(row.get(col,''))
+   except ValueError:return None
+  level,capacity,unit,kind=number(9),number(8),number(7),number(4)
+  percent=None
+  if level is not None and level>=0:
+   if unit==19 and level<=100:percent=float(level)
+   elif unit not in (None,1,2,19) and capacity is not None and capacity>0 and level<=capacity:percent=round(level/capacity*100,2)
+  supplies.append({'id':index,'name':row.get(6) or 'Supply '+index,'class':kind,'type':number(5),'percent':percent,'level':level,'capacity':capacity,'unit':unit})
+ if not supplies:raise AdapterError('Printer supplies unavailable. Check Printer-MIB support and SNMP read permissions.')
+ return {'source':'Printer SNMPv3','supplies':supplies,'cpu':None,'memory':None,'disk':None}
+
+def printer_action(c,action,args):raise AdapterError('Printer monitoring is read-only.')
+
 def snmp_action(c,action,args):
  if action!='poe':raise AdapterError('Only standard POWER-ETHERNET-MIB PoE control is supported for SNMP devices.')
  group=args.get('group',1);port=args.get('port');mode=args.get('mode')
  if type(group)!=int or type(port)!=int or not 1<=group<=1024 or not 1<=port<=1024 or mode not in ('on','off'):raise AdapterError('Enter a valid PSE group, port, and on/off mode.')
  return snmp(c,'.1.3.6.1.2.1.105.1.1.1.3.'+str(group)+'.'+str(port),value=1 if mode=='on' else 2)
 
-POLL={'proxmox':pve_poll,'mikrotik':mt_poll,'unifi':ui_poll,'snmp':snmp_poll}
-ACTION={'proxmox':pve_action,'mikrotik':mt_action,'unifi':ui_action,'snmp':snmp_action}
+POLL={'proxmox':pve_poll,'mikrotik':mt_poll,'unifi':ui_poll,'snmp':snmp_poll,'printer':printer_poll}
+ACTION={'proxmox':pve_action,'mikrotik':mt_action,'unifi':ui_action,'snmp':snmp_action,'printer':printer_action}
 SECRETS={'tokenSecret','password','apiKey','authPassword','privPassword'}
 
 def validate(config):
  kind=config.get('kind')
- if kind not in POLL:raise ValueError('Choose Proxmox, MikroTik, UniFi, or SNMPv3.')
- allowed={'kind','url','caPem','node','target','vmid','tokenId','tokenSecret','username','password','siteId','deviceId','apiKey','host','port','authPassword','privPassword','temperatureOid','temperatureDivisor','allowControl'}
+ if kind not in POLL:raise ValueError('Choose Proxmox, MikroTik, UniFi, SNMPv3, or Printer SNMPv3.')
+ allowed={'kind','url','caPem','node','target','vmid','tokenId','tokenSecret','username','password','siteId','deviceId','apiKey','host','port','authPassword','privPassword','temperatureOid','temperatureDivisor','allowControl','supplyThreshold'}
  c={k:v for k,v in config.items() if k in allowed}
  for key,value in c.items():
   if isinstance(value,str) and (len(value)>16384 or '\x00' in value or ('\n' in value and key!='caPem') or '\r' in value):raise ValueError('Invalid '+key+' value.')
  if type(c.get('allowControl',False))!=bool:raise ValueError('Invalid controls setting.')
- required={'proxmox':['url','node','tokenId','tokenSecret'],'mikrotik':['url','username','password'],'unifi':['url','siteId','deviceId','apiKey'],'snmp':['host','username','authPassword','privPassword']}[kind]
+ required={'proxmox':['url','node','tokenId','tokenSecret'],'mikrotik':['url','username','password'],'unifi':['url','siteId','deviceId','apiKey'],'snmp':['host','username','authPassword','privPassword'],'printer':['host','username','authPassword','privPassword']}[kind]
  for key in required:
   if not isinstance(c.get(key),str) or not c[key].strip():raise ValueError('Required setting: '+key)
- if kind!='snmp':
+ if kind not in ('snmp','printer'):
   u=urlsplit(c['url'])
   if u.scheme!='https' or not u.hostname or u.username or u.password or u.query or u.fragment:raise ValueError('Use a direct HTTPS URL without embedded credentials or query parameters.')
   if kind in ('proxmox','mikrotik') and u.path not in ('','/'):raise ValueError('Use the server origin only; API paths are added automatically.')
@@ -171,13 +196,17 @@ def validate(config):
  if kind=='proxmox':
   if c.get('target','node') not in ('node','lxc','qemu'):raise ValueError('Choose node, lxc, or qemu.')
   if c.get('target') in ('lxc','qemu') and (type(c.get('vmid'))!=int or not 100<=c['vmid']<=999999999):raise ValueError('Enter a valid VM/container ID.')
- if kind=='snmp':
+ if kind in ('snmp','printer'):
   if any(x in c['host'] for x in [' ','/','\n',':']):raise ValueError('Use an IPv4 address or hostname for SNMP.')
   if any(len(c[k])<8 for k in ['authPassword','privPassword']):raise ValueError('SNMPv3 passphrases need at least 8 characters.')
   if type(c.get('port',161))!=int or not 1<=c.get('port',161)<=65535:raise ValueError('Invalid SNMP port.')
   if c.get('temperatureOid') and not re.fullmatch(r'\.?[0-9]+(?:\.[0-9]+)+',c['temperatureOid']):raise ValueError('Use a numeric temperature OID.')
   divisor=c.get('temperatureDivisor',1)
   if type(divisor) not in (float,int) or not math.isfinite(divisor) or divisor<=0:raise ValueError('Temperature divisor must be positive.')
+ if kind=='printer':
+  threshold=c.get('supplyThreshold',20)
+  if type(threshold)!=int or not 0<=threshold<=100:raise ValueError('Printer supply threshold must be 0–100 percent; 0 disables warnings.')
+  c['supplyThreshold']=threshold;c['allowControl']=False
  return c
 
 def public(config):return {**{k:v for k,v in config.items() if k not in SECRETS},'credentialsConfigured':True}
