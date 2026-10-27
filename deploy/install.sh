@@ -7,11 +7,15 @@ if ! command -v snmpget >/dev/null 2>&1; then
  apt-get update -qq
  DEBIAN_FRONTEND=noninteractive apt-get install -y snmp
 fi
+if ! command -v ping >/dev/null 2>&1 || ! python3 -c 'import dns.resolver,apprise' >/dev/null 2>&1; then
+ apt-get update -qq
+ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends iputils-ping python3-dnspython apprise
+fi
 getent passwd bitwise-control >/dev/null || useradd --system --no-create-home --shell /usr/sbin/nologin bitwise-control
 install -d -m 755 /opt/bitwise-control/dist
 install -d -m 700 -o bitwise-control -g bitwise-control /etc/bitwise-control /var/lib/bitwise-control
-install -m 644 "$SOURCE/server.py" "$SOURCE/agent.py" "$SOURCE/adapters.py" "$SOURCE/notifications.py" "$SOURCE/backup.py" /opt/bitwise-control/
-install -m 644 "$SOURCE/dist/index.html" "$SOURCE/dist/login.html" "$SOURCE/dist/app.js" /opt/bitwise-control/dist/
+install -m 644 "$SOURCE/server.py" "$SOURCE/agent.py" "$SOURCE/adapters.py" "$SOURCE/notifications.py" "$SOURCE/backup.py" "$SOURCE/service_checks.py" /opt/bitwise-control/
+install -m 644 "$SOURCE/dist/index.html" "$SOURCE/dist/login.html" "$SOURCE/dist/app.js" "$SOURCE/dist/monitors.js" /opt/bitwise-control/dist/
 if [ ! -f /etc/bitwise-control/auth.json ]; then
  python3 - <<'PY'
 import secrets,hashlib,json

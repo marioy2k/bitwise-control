@@ -19,7 +19,7 @@ class API(unittest.TestCase):
  def setUp(self):
   app.SESSIONS.clear();app.ATTEMPTS.clear()
   with app.connect() as c:
-   for table in ['inventory','tokens','samples','incidents','audit','jobs','connections','settings','outbox','users']:c.execute('DELETE FROM '+table)
+   for table in ['inventory','tokens','samples','incidents','audit','jobs','connections','settings','outbox','users','push_tokens','status_pages']:c.execute('DELETE FROM '+table)
   app.init();app.AUTH.write_text(json.dumps({'username':'admin','salt':'01'*16,'hash':app.digest('test-password-123',bytes.fromhex('01'*16))}))
   self.client=build_opener(HTTPCookieProcessor(CookieJar()));self.request('/login','POST',{'username':'admin','password':'test-password-123'})
  def request(self,path,method='GET',body=None,headers=None,client=None):
@@ -224,4 +224,52 @@ class API(unittest.TestCase):
   for field in ['reminderMinutes','summaryMinutes']:
    for invalid in [-1,1,6,True,'5',15]:
     with self.subTest(field=field,value=invalid):self.assertEqual(self.request('/api/monitoring','POST',{'delivery':{'mode':'none',field:invalid}})[0],400)
+ def create_monitor(self,kind='http',**kw):
+  if not self.request('/api/state')[1]['companies']:self.inventory()
+  return self.request('/api/monitors','POST',{'name':'Test service','company':'Example','config':{'kind':'service','monitorType':kind,'endpoint':'https://example.com/health?token=private-url','headersJson':'{"Authorization":"private-header"}','host':'127.0.0.1','interval':20,'timeout':2,'retries':1,**kw}})
+ def test_service_monitor_creation_secret_preservation_and_access(self):
+  code,result,_=self.create_monitor();self.assertEqual(code,200);ident=result['id'];state=self.request('/api/state')[1];device=next(d for d in state['devices'] if d['id']==ident)
+  self.assertNotIn('private-url',json.dumps(state));self.assertNotIn('private-header',json.dumps(state));self.assertEqual(device['integration']['interval'],20)
+  config=device['integration'];config['endpoint']='';config['headersJson']=''
+  self.assertEqual(self.request('/api/monitors','POST',{'id':ident,'name':'Edited service','company':'Example','config':config})[0],200)
+  with app.connect() as c:self.assertIn('private-url',json.loads(c.execute('SELECT config FROM connections WHERE device=?',(ident,)).fetchone()[0])['endpoint'])
+  operator=self.account_client('operator',['Example']);self.assertEqual(self.request('/api/monitors','POST',{'name':'No','company':'Example','config':config},client=operator)[0],403)
+ def test_service_retries_and_recovery(self):
+  _,result,_=self.create_monitor();ident=result['id']
+  with patch.object(app.adapters,'poll',return_value={'checkSuccess':False,'operationalOnline':False,'monitorMessage':'Connection failed','source':'Service monitor'}):
+   app.poll_device(ident);app.incidents();self.assertEqual(next(d for d in app.view_state()['devices'] if d['id']==ident)['status'],'Pending')
+   app.poll_device(ident);app.incidents();self.assertEqual(next(d for d in app.view_state()['devices'] if d['id']==ident)['status'],'Offline')
+  with patch.object(app.adapters,'poll',return_value={'checkSuccess':True,'operationalOnline':True,'source':'Service monitor','responseMs':12}):app.poll_device(ident);app.incidents()
+  self.assertEqual(next(d for d in app.view_state()['devices'] if d['id']==ident)['status'],'Online');self.assertEqual(app.view_state()['incidents'],[])
+ def test_push_heartbeat_expiry_rotation_pause_and_revocation(self):
+  _,result,_=self.create_monitor('push');ident=result['id'];token=result['pushToken'];anonymous=build_opener()
+  self.assertEqual(self.request('/api/push/'+token,client=anonymous)[0],200)
+  self.assertEqual(next(d for d in app.view_state()['devices'] if d['id']==ident)['status'],'Online')
+  with app.connect() as c:c.execute('UPDATE samples SET time=time-100 WHERE device=?',(ident,))
+  self.assertEqual(next(d for d in app.view_state()['devices'] if d['id']==ident)['status'],'Offline')
+  self.assertEqual(self.request('/api/push/'+token+'?status=down',client=anonymous)[0],200)
+  new=self.request('/api/monitor-control','POST',{'id':ident,'action':'rotate-push'})[1]['pushToken'];self.assertEqual(self.request('/api/push/'+token,client=anonymous)[0],401)
+  self.request('/api/monitor-control','POST',{'id':ident,'action':'pause'});self.assertEqual(self.request('/api/push/'+new,client=anonymous)[0],409);self.assertEqual(next(d for d in app.view_state()['devices'] if d['id']==ident)['status'],'Paused')
+ def test_service_clone_keeps_secrets_private(self):
+  _,result,_=self.create_monitor();self.assertEqual(self.request('/api/monitor-control','POST',{'id':result['id'],'action':'clone'})[0],200)
+  services=[d for d in app.view_state()['devices'] if d.get('integration',{} ) and d['integration'].get('kind')=='service'];self.assertEqual(len(services),2);self.assertEqual(len({d['id'] for d in services}),2);self.assertNotIn('private-header',json.dumps(services))
+ def test_status_page_explicit_publication_and_no_private_fields(self):
+  _,result,_=self.create_monitor();ident=result['id'];anonymous=build_opener()
+  self.assertEqual(self.request('/api/status/customer',client=anonymous)[0],404)
+  self.assertEqual(self.request('/api/status-pages','POST',{'slug':'customer','title':'Customer status','devices':[ident]})[0],200)
+  code,data,_=self.request('/api/status/customer',client=anonymous);self.assertEqual(code,200);self.assertEqual(len(data['devices']),1);self.assertNotIn('ip',data['devices'][0]);self.assertNotIn('integration',data['devices'][0]);self.assertNotIn('private',json.dumps(data))
+  self.assertEqual(self.request('/status/customer',client=anonymous)[0],200);self.request('/api/status-pages','POST',{'slug':'customer','delete':True});self.assertEqual(self.request('/api/status/customer',client=anonymous)[0],404)
+ def test_monitor_uptime_excludes_unobserved_gaps(self):
+  _,result,_=self.create_monitor();ident=result['id'];now=app.time.time()
+  with app.connect() as c:
+   c.execute('INSERT INTO samples(device,time,data) VALUES(?,?,?)',(ident,now-100,json.dumps({'serviceOnline':True,'responseMs':10})))
+   c.execute('INSERT INTO samples(device,time,data) VALUES(?,?,?)',(ident,now-10,json.dumps({'serviceOnline':False})))
+   with patch.object(app.time,'time',return_value=now):stats=app.monitor_stats(c,ident,{'interval':20,'timeout':2})
+  self.assertEqual(stats['day']['observedSeconds'],32);self.assertAlmostEqual(stats['day']['uptime'],68.75)
+ def test_prometheus_metrics_company_scope(self):
+  self.inventory();viewer=self.account_client('viewer',['Example']);code,data,_=self.request('/api/metrics',client=viewer);self.assertEqual(code,200);self.assertIn(b'bitwise_device_up',data)
+ def test_public_status_domain_badge_and_html_escape(self):
+  self.inventory();self.request('/api/status-pages','POST',{'slug':'mapped','title':'<script>','description':'<img onerror=alert(1)>','domain':'status.example.com','devices':[1]})
+  anonymous=build_opener();code,body,_=self.request('/',headers={'Host':'status.example.com'},client=anonymous);self.assertEqual(code,200);self.assertIn(b'&lt;script&gt;',body);self.assertNotIn(b'<img onerror',body)
+  self.assertEqual(self.request('/badge/mapped/1.svg',client=anonymous)[0],200);self.assertEqual(self.request('/badge/mapped/999.svg',client=anonymous)[0],404)
 if __name__=='__main__':unittest.main()

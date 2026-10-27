@@ -1,5 +1,6 @@
 """Device adapters. Only documented, explicitly selected operations are exposed."""
 import base64,json,math,os,re,ssl,subprocess,tempfile
+import service_checks
 from urllib.parse import quote,urlsplit
 from urllib.request import Request,build_opener,HTTPSHandler,HTTPRedirectHandler
 from urllib.error import HTTPError,URLError
@@ -172,12 +173,13 @@ def snmp_action(c,action,args):
  if type(group)!=int or type(port)!=int or not 1<=group<=1024 or not 1<=port<=1024 or mode not in ('on','off'):raise AdapterError('Enter a valid PSE group, port, and on/off mode.')
  return snmp(c,'.1.3.6.1.2.1.105.1.1.1.3.'+str(group)+'.'+str(port),value=1 if mode=='on' else 2)
 
-POLL={'proxmox':pve_poll,'mikrotik':mt_poll,'unifi':ui_poll,'snmp':snmp_poll,'printer':printer_poll}
-ACTION={'proxmox':pve_action,'mikrotik':mt_action,'unifi':ui_action,'snmp':snmp_action,'printer':printer_action}
-SECRETS={'tokenSecret','password','apiKey','authPassword','privPassword'}
+POLL={'proxmox':pve_poll,'mikrotik':mt_poll,'unifi':ui_poll,'snmp':snmp_poll,'printer':printer_poll,'service':service_checks.poll}
+ACTION={'proxmox':pve_action,'mikrotik':mt_action,'unifi':ui_action,'snmp':snmp_action,'printer':printer_action,'service':printer_action}
+SECRETS={'tokenSecret','password','apiKey','authPassword','privPassword'}|service_checks.PRIVATE
 
 def validate(config):
  kind=config.get('kind')
+ if kind=='service':return service_checks.validate(config)
  if kind not in POLL:raise ValueError('Choose Proxmox, MikroTik, UniFi, SNMPv3, or Printer SNMPv3.')
  allowed={'kind','url','caPem','node','target','vmid','tokenId','tokenSecret','username','password','siteId','deviceId','apiKey','host','port','authPassword','privPassword','temperatureOid','temperatureDivisor','allowControl','supplyThreshold','contextName'}
  c={k:v for k,v in config.items() if k in allowed}
@@ -211,7 +213,9 @@ def validate(config):
   c['supplyThreshold']=threshold;c['allowControl']=False
  return c
 
-def public(config):return {**{k:v for k,v in config.items() if k not in SECRETS},'credentialsConfigured':True}
+def public(config):
+ if config.get('kind')=='service':return service_checks.public(config)
+ return {**{k:v for k,v in config.items() if k not in SECRETS},'credentialsConfigured':True}
 def poll(c):return POLL[c['kind']](c)
 def action(c,name,args):
  if not c.get('allowControl'):raise AdapterError('Enable device controls in connection settings first.')

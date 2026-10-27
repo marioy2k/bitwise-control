@@ -1,11 +1,11 @@
 """Opt-in notification delivery; secrets never appear in public settings."""
-import json,smtplib,ssl,re
+import json,smtplib,ssl,re,logging
 from email.message import EmailMessage
 from urllib.parse import urlsplit
 from urllib.request import Request,build_opener,HTTPSHandler
 from adapters import NoRedirect
 DEFAULT_RULES={'cpu':90,'memory':90,'disk':90,'temperature':70,'offlineSeconds':180}
-SECRETS={'smtpPassword','webhookUrl','webhookToken','discordUrl'}
+SECRETS={'smtpPassword','webhookUrl','webhookToken','discordUrl','appriseUrls'}
 
 def validate(body,previous):
  out={'rules':{},'delivery':{}}
@@ -16,12 +16,12 @@ def validate(body,previous):
   if key=='offlineSeconds' and value<60:raise ValueError('Missing-report timeout must be at least 60 seconds.')
   out['rules'][key]=value
  delivery=body.get('delivery',{});mode=delivery.get('mode','none')
- if mode not in ('none','email','webhook','discord','both'):raise ValueError('Choose disabled, email, Discord, both, or webhook notifications.')
- for key in ['mode','smtpHost','smtpPort','smtpUser','smtpPassword','sender','recipient','webhookUrl','webhookToken','discordUrl']:
+ if mode not in ('none','email','webhook','discord','both','apprise'):raise ValueError('Choose disabled, email, Discord, both, or webhook notifications.')
+ for key in ['mode','smtpHost','smtpPort','smtpUser','smtpPassword','sender','recipient','webhookUrl','webhookToken','discordUrl','appriseUrls']:
   value=delivery.get(key)
   if key in SECRETS and not value:value=previous.get('delivery',{}).get(key,'')
   if value is not None:
-   if key!='smtpPort' and (not isinstance(value,str) or len(value)>4096 or '\n' in value or '\r' in value):raise ValueError('Invalid notification setting: '+key)
+   if key!='smtpPort' and (not isinstance(value,str) or len(value)>4096 or ('\n' in value and key!='appriseUrls') or '\r' in value):raise ValueError('Invalid notification setting: '+key)
    out['delivery'][key]=value
  for key in ('reminderMinutes','summaryMinutes'):
   value=delivery.get(key,previous.get('delivery',{}).get(key,0))
@@ -42,6 +42,17 @@ def validate(body,previous):
  if mode in ('discord','both'):
   u=urlsplit(out['delivery'].get('discordUrl',''))
   if u.scheme!='https' or u.hostname!='discord.com' or u.port not in (None,443) or u.username or u.password or u.query or u.fragment or not re.fullmatch(r'/api(?:/v[0-9]+)?/webhooks/[0-9]+/[A-Za-z0-9_.-]+',u.path):raise ValueError('Enter a Discord webhook URL from your channel integration settings.')
+ if mode=='apprise':
+  urls=[url.strip() for url in out['delivery'].get('appriseUrls','').splitlines() if url.strip()]
+  if not 1<=len(urls)<=20:raise ValueError('Enter 1–20 Apprise service URLs, one per line.')
+  try:
+   import apprise
+  except ImportError:raise ValueError('Install the apprise package on the monitoring server.')
+  logging.getLogger('apprise').disabled=True
+  for url in urls:
+   notifier=apprise.Apprise()
+   if not notifier.add(url):raise ValueError('An Apprise URL is invalid or unsupported by the installed library.')
+  out['delivery']['appriseUrls']='\n'.join(urls)
  return out
 
 def public(settings):
@@ -50,6 +61,7 @@ def public(settings):
 
 def channels(config):
  mode=config.get('mode','none')
+ if mode=='apprise':return ['apprise:'+str(i) for i,url in enumerate(config.get('appriseUrls','').splitlines()) if url.strip()]
  return ['email','discord'] if mode=='both' else ([] if mode=='none' else [mode])
 
 def send(config,subject,message):
@@ -79,3 +91,10 @@ def send(config,subject,message):
   request=Request(config['discordUrl']+'?wait=true',data=json.dumps(body).encode(),headers={'Content-Type':'application/json','User-Agent':'BitwiseControl/1.0'})
   with build_opener(NoRedirect(),HTTPSHandler(context=ssl.create_default_context())).open(request,timeout=15) as response:
    if not 200<=response.status<300:raise ValueError('Discord rejected the notification.')
+
+ if mode.startswith('apprise:'):
+  import apprise
+  logging.getLogger('apprise').disabled=True
+  urls=[url for url in config.get('appriseUrls','').splitlines() if url.strip()];index=int(mode.split(':',1)[1]);notifier=apprise.Apprise()
+  if not 0<=index<len(urls) or not notifier.add(urls[index]):raise ValueError('Notification provider configuration is unavailable.')
+  if not notifier.notify(title=subject,body=message):raise ValueError('Notification provider rejected the message.')

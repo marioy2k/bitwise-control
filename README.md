@@ -151,8 +151,52 @@ In **Settings → Configure monitoring**, choose a channel, fill in its settings
 
 **Settings → Configure monitoring** provides two independent schedules: **Repeat unresolved alert reminders** and **Send status summaries**. Choose disabled, every 5 minutes, or every 10 minutes for each. Discord/SMTP destinations must be enabled and configured.
 
-Open alerts still notify immediately, and recovery notifies once. Reminders continue only while an incident is open and outside maintenance. Pending alert/reminder messages are cancelled when the incident recovers or enters maintenance; a channel with a pending alert/reminder does not accumulate more reminders for that device. Status summaries include healthy devices, offline/warning counts, and available supply levels. Summary and reminder timers persist across restarts, run on the 30-second monitoring cycle, and do not replay every missed interval after an outage. Both schedules are disabled by default until explicitly enabled. Tests send once and do not change schedules.
+Open alerts still notify immediately, and recovery notifies once. Reminders continue only while an incident is open and outside maintenance. Pending alert/reminder messages are cancelled when the incident recovers or enters maintenance; a channel with a pending alert/reminder does not accumulate more reminders for that device. Status summaries include healthy devices, offline/warning counts, and available supply levels. Summary and reminder timers persist across restarts, run on the 5-second monitoring cycle, and do not replay every missed interval after an outage. Both schedules are disabled by default until explicitly enabled. Tests send once and do not change schedules.
 
 ## Windows security monitoring roadmap
 
 Windows security integration is planned, not installed in this release. A Windows agent could collect Microsoft Defender protection status and detected threats, selected Windows security events, and applicable missing updates through Windows Update Agent. These are monitoring signals, not a replacement antivirus engine or complete SIEM. Full software/CVE vulnerability coverage requires a supported vulnerability data source or platform, with its own access and licensing. Windows setup was deferred at the user's request.
+
+## Native service monitoring
+
+Bitwise Control now has a **Monitors** workspace. Add monitors under an existing company, with 20-second to 24-hour check intervals, 1–30 second timeouts, consecutive-failure retries, tags, groups, pause/resume, cloning, bulk pause/resume, maintenance, and notification opt-out. Monitoring uses the existing company permissions; only administrators configure endpoints and credentials. Operators can check assigned devices and maintain inventory; viewers can read assigned companies.
+
+Supported service checks:
+
+| Type | What is actually checked |
+| --- | --- |
+| HTTP/HTTPS | GET, HEAD, or POST response and configured status ranges; custom headers/body, HTTP(S) proxy, private CA; redirects are not followed |
+| HTTP keyword | Presence/absence of a case-sensitive string in a response of at most 2 MB |
+| HTTP JSON value | Simple dot-separated key/index lookup and equality against a JSON value (not JSONata) |
+| TCP port | Successful TCP connection |
+| Ping | ICMP echo using iputils-ping |
+| DNS | A/AAAA/CNAME/MX/TXT/NS/SOA/SRV/CAA/PTR via system or selected DNS server, optionally an exact expected answer |
+| TLS certificate | Verified TLS handshake, expiry timestamp, and configurable days-before-expiry warning |
+| WebSocket | Verified HTTP upgrade handshake; no application-message exchange |
+| Docker | A verified HTTPS container-inspection API response with State.Running and optional health status; no Docker socket mounts or container writes |
+| Steam | A2S_INFO query, including standard challenge response; split/compressed responses are unsupported |
+| NTP | Server-mode synchronized response with matching origin timestamp; IPv4 UDP |
+| Redis | Optional AUTH and PING/PONG over TLS or plain transport; no data writes |
+| MQTT | MQTT 3.1.1 CONNECT/CONNACK and DISCONNECT, optional credentials and TLS; no publish/subscription |
+| SMTP/IMAP/POP3 | Protocol NOOP, optional login, verified TLS/STARTTLS or explicitly selected plain transport; no email delivery, retrieval, or deletion |
+| Push heartbeat | Private per-monitor GET/POST URL, optional status=down; hashed tokens, rotation/revocation, interval plus grace deadline |
+
+The detail panel includes recent heartbeat bars, measured response-time chart, last 60 check rows, and time-weighted 24-hour/7-day/30-day uptime. Unobserved gaps beyond interval plus timeout are excluded, not counted as healthy. Retry periods have an unknown result until the down threshold is met. Uptime is observational and is not an SLA guarantee. Thirty-day sample retention continues to apply.
+
+HTTPS certificate validation stays enabled. Endpoint URLs, custom headers, request bodies, proxy credentials, and push credentials are withheld from normal state responses; editing with blank private fields keeps the saved values. Push URLs are bearer credentials and must be kept private; access logs redact their token.
+
+## Status pages, badges, and metrics
+
+Administrators can publish multiple pages through **Status pages**, selecting exactly which device names/status/24-hour uptime to expose. Internal addresses, credentials, company assignments, and diagnostic messages stay private. Public descriptions are escaped as text. Published pages refresh every 30 seconds and are available at `/status/SLUG`; `/api/status/SLUG` provides the same limited data. Unpublishing removes public access. Optional custom hostnames route their root URL to the selected page after the user configures DNS and, if needed, HTTPS and port forwarding separately. No domain or public firewall settings are changed automatically.
+
+A public SVG badge is available only for published devices at `/badge/SLUG/DEVICE_ID.svg`. Authenticated `/api/metrics` provides Prometheus device-up gauges limited to the current user's company access.
+
+## Additional notification providers
+
+**Settings → Configure monitoring → More providers (Apprise)** accepts one Apprise service URL per line, up to 20 destinations. The distribution's `apprise` package supplies its supported providers, including services such as Telegram, Slack, Gotify, ntfy, and Pushover. Provider URL syntax and supported capabilities follow the installed library; see [Apprise's provider documentation](https://appriseit.com/services/). Each destination has independent retries and test results. Provider URLs remain secret in normal API responses and logs from the Apprise library are suppressed to avoid disclosing them. The existing Discord/SMTP modes, test button, reminders, and summaries remain available.
+
+## Uptime Kuma feature comparison
+
+This is native Bitwise development, not an installed Uptime Kuma service and not full Uptime Kuma 2.5.8 parity. Delivered here: the service check types listed above, 20-second scheduling, retries, groups/tags, pause/resume/clone/bulk actions, response-time and uptime history, TLS expiry, HTTP proxy support, multiple public status pages, custom-hostname routing, status descriptions, public badges, authenticated metrics, and additional notification providers through Apprise. Existing printer monitoring and infrastructure controls remain.
+
+Still outstanding for full parity: dedicated SQL/MongoDB/Kafka/AMQP/RADIUS/gRPC/Tailscale/Globalping integrations, real-browser transactions, full JSONata expressions, proxy support outside HTTP, advanced per-monitor notification routing, recurring maintenance calendars, status-page incident timelines/RSS/themes, TOTP 2FA/OIDC/API-key administration, localization, and other specialised provider-specific options. Windows security monitoring remains deferred. Do not present these outstanding features as implemented.
