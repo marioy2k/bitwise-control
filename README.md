@@ -112,4 +112,15 @@ Automated tests cover authentication, persistence, concurrency checks, secret re
 - [Official UniFi Network OpenAPI specification](https://developer.ui.com/network/v10.6.106/openapi.json)
 - [Net-SNMP client configuration](https://www.net-snmp.org/docs/man/snmp.conf.html)
 
-Deployment policy: completed updates are committed to GitHub and applied to `10.10.111.49` together. An automatic GitHub deployment hook is not installed. Agents and device adapters still need to be connected to real targets and validated with their hardware-specific permissions; this repository is not a claim that every model supports every operation.
+Deployment policy: completed updates normally go to GitHub and `10.10.111.49` together. The current user instruction is GitHub-only work; server and device changes are on hold. An automatic GitHub deployment hook is not installed. Agents and device adapters still need to be connected to real targets and validated with their hardware-specific permissions; this repository is not a claim that every model supports every operation.
+
+## Connection activation status
+
+The application code and integrations are published. Hardware validation remains pending:
+
+- The last server check found no inventory entries or saved device connections. Devices created in the original browser-only version require the in-app import prompt in that same browser session, or manual re-entry.
+- SSH access to the Ubuntu container at `10.10.111.39` rejected the available public key. Its agent has not been installed.
+- Proxmox host, MikroTik, UniFi controller, and SNMP device endpoints and credentials have not been provided.
+- Notification delivery remains disabled until a real destination is configured.
+
+When device work resumes, import or create the company/device inventory, establish authorized access, configure the relevant connection in the app, and verify real measurements, history, and incident recovery. Do not use a successful TCP port check as proof of authenticated monitoring. Reboots, upgrades, and PoE changes require separate explicit test instructions. Enter secrets in the application connection forms; never add them to the repository or commit history.
