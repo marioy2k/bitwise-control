@@ -334,7 +334,7 @@ class Handler(BaseHTTPRequestHandler):
   user=self.identity()
   if path.startswith('/api/') and path!='/api/password':
    if user['role']=='viewer':raise PermissionError('Read-only account. Operator or administrator access required.')
-   if path in ('/api/users','/api/monitoring','/api/integration','/api/enroll','/api/discover') and user['role']!='admin':raise PermissionError('Administrator access required.')
+   if path in ('/api/users','/api/monitoring','/api/monitoring/test','/api/integration','/api/enroll','/api/discover') and user['role']!='admin':raise PermissionError('Administrator access required.')
   if path=='/api/state' and self.command=='PUT':return self.reply(200,update_inventory(self.body(),user))
   if path=='/api/users':
    body=self.body();username=body.get('username','');role=body.get('role','viewer');companies=body.get('companies',[]);enabled=body.get('enabled',True);password=body.get('password','')
@@ -354,6 +354,22 @@ class Handler(BaseHTTPRequestHandler):
     for token,session in list(SESSIONS.items()):
      if session['username']==username:SESSIONS.pop(token,None)
    return self.reply(200,{'ok':True})
+  if path=='/api/monitoring/test':
+   body=self.body()
+   with connect() as c:previous=get_settings(c)
+   config=notifications.validate(body,previous)['delivery'];channels=notifications.channels(config)
+   if not channels:raise ValueError('Choose a notification channel before testing.')
+   results=[]
+   for channel in channels:
+    status='sent';message='Accepted by the delivery service. Check the destination, including email spam folders.'
+    try:notifications.send({**config,'mode':channel},'Bitwise Control test notification','This is a test notification from Bitwise Control. Your notification connection is working.')
+    except Exception:
+     status='failed';message='Delivery failed. Check '+('SMTP server, port, credentials, and sender permissions.' if channel=='email' else 'the webhook URL, destination permissions, and server network access.')
+    with LOCK,connect() as c:
+     c.execute('INSERT INTO outbox(subject,message,status,attempts,created,channel) VALUES(?,?,?,?,?,?)',('Bitwise Control test notification','Administrator-requested delivery test.',status,1,time.time(),channel))
+     audit(c,'Test notification '+status+': '+channel)
+    results.append({'channel':channel,'status':status,'message':message})
+   return self.reply(200,{'results':results})
   if path=='/api/monitoring':
    body=self.body()
    with LOCK,connect() as c:

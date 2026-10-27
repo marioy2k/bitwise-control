@@ -162,4 +162,26 @@ class API(unittest.TestCase):
   self.request('/api/monitoring','POST',{'rules':{},'delivery':{'mode':'none'}})
   with patch.object(app.notifications,'send') as send:app.deliver_notifications();send.assert_not_called()
   with app.connect() as c:self.assertEqual(c.execute("SELECT count(*) FROM outbox WHERE status='cancelled'").fetchone()[0],2)
+ def test_notification_test_both_channels_draft_and_failure_isolation(self):
+  self.inventory();before=self.request('/api/state')[1]['monitoring']
+  body={'rules':{},'delivery':{'mode':'both','smtpHost':'smtp.example.com','sender':'alerts@example.com','recipient':'admin@example.com','smtpPassword':'smtp-secret','discordUrl':'https://discord.com/api/webhooks/123456/discord-secret'}}
+  def deliver(config,*args):
+   if config['mode']=='email':raise OSError('private error smtp-secret discord-secret')
+  with patch.object(app.notifications,'send',side_effect=deliver) as send:
+   code,data,_=self.request('/api/monitoring/test','POST',body);self.assertEqual(code,200);self.assertEqual(send.call_count,2)
+  self.assertEqual([r['status'] for r in data['results']],['failed','sent']);self.assertNotIn('smtp-secret',json.dumps(data));self.assertNotIn('discord-secret',json.dumps(data));self.assertEqual(self.request('/api/state')[1]['monitoring'],before)
+  with patch.object(app.notifications,'send') as send:app.deliver_notifications();send.assert_not_called()
+  with app.connect() as c:self.assertEqual(c.execute('SELECT count(*) FROM outbox WHERE attempts=1').fetchone()[0],2)
+ def test_notification_test_reuses_saved_secrets(self):
+  self.inventory();body={'rules':{},'delivery':{'mode':'discord','discordUrl':'https://discord.com/api/webhooks/123456/secret'}};self.request('/api/monitoring','POST',body)
+  with patch.object(app.notifications,'send') as send:
+   self.assertEqual(self.request('/api/monitoring/test','POST',{'rules':{},'delivery':{'mode':'discord','discordUrl':''}})[0],200);self.assertEqual(send.call_args.args[0]['discordUrl'],body['delivery']['discordUrl'])
+ def test_notification_test_requires_admin_and_valid_destination(self):
+  self.inventory()
+  with patch.object(app.notifications,'send') as send:
+   self.assertEqual(self.request('/api/monitoring/test','POST',{'delivery':{'mode':'none'}})[0],400)
+   self.assertEqual(self.request('/api/monitoring/test','POST',{'delivery':{'mode':'discord','discordUrl':'https://example.com'}})[0],400)
+   operator=self.account_client('operator',['Example']);self.assertEqual(self.request('/api/monitoring/test','POST',{'delivery':{'mode':'none'}},client=operator)[0],403)
+   viewer=self.account_client('viewer',['Example'],username='viewer');self.assertEqual(self.request('/api/monitoring/test','POST',{'delivery':{'mode':'none'}},client=viewer)[0],403)
+   send.assert_not_called()
 if __name__=='__main__':unittest.main()
