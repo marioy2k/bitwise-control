@@ -44,6 +44,7 @@ def init():
   CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, time REAL NOT NULL, action TEXT NOT NULL, device TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS incidents(device INTEGER PRIMARY KEY, opened REAL NOT NULL, message TEXT NOT NULL);
   ''')
+  if 'channel' not in [row['name'] for row in c.execute('PRAGMA table_info(outbox)')]:c.execute("ALTER TABLE outbox ADD COLUMN channel TEXT NOT NULL DEFAULT ''")
   if 'actor' not in [row['name'] for row in c.execute('PRAGMA table_info(audit)')]:c.execute("ALTER TABLE audit ADD COLUMN actor TEXT NOT NULL DEFAULT 'system'")
   c.execute('INSERT OR IGNORE INTO inventory VALUES(1,0,?)',(json.dumps({'companies':[],'devices':[],'rules':[],'channels':{}}),))
 
@@ -61,14 +62,19 @@ def get_settings(c):
  return json.loads(row['value']) if row else {'rules':dict(notifications.DEFAULT_RULES),'delivery':{'mode':'none'}}
 
 def queue_notification(c,subject,message):
- if get_settings(c)['delivery'].get('mode','none')!='none':c.execute('INSERT INTO outbox(subject,message,created) VALUES(?,?,?)',(subject,message,time.time()))
+ for channel in notifications.channels(get_settings(c)['delivery']):
+  c.execute('INSERT INTO outbox(subject,message,created,channel) VALUES(?,?,?,?)',(subject,message,time.time(),channel))
 
 def deliver_notifications():
  with connect() as c:
   config=get_settings(c)['delivery'];rows=[dict(r) for r in c.execute("SELECT * FROM outbox WHERE status='pending' AND next_attempt<=? ORDER BY id LIMIT 5",(time.time(),))]
  if config.get('mode','none')=='none':return
  for row in rows:
-  try:notifications.send(config,row['subject'],row['message']);status='sent'
+  channel=row['channel'] or config.get('mode','none')
+  if channel not in notifications.channels(config):
+   with LOCK,connect() as c:c.execute("UPDATE outbox SET status='cancelled' WHERE id=?",(row['id'],))
+   continue
+  try:notifications.send({**config,'mode':channel},row['subject'],row['message']);status='sent'
   except Exception:status='failed' if row['attempts']>=4 else 'pending'
   with LOCK,connect() as c:c.execute('UPDATE outbox SET status=?,attempts=attempts+1,next_attempt=? WHERE id=?',(status,time.time()+60*2**row['attempts'],row['id']))
 
@@ -76,7 +82,7 @@ def view_state(user=None):
  with LOCK,connect() as c:
   state,rev=load(c);settings=get_settings(c);rules=settings['rules']
   state['monitoring']=notifications.public(settings)
-  state['notificationStatus']=[dict(r) for r in c.execute('SELECT id,subject,status,attempts,created FROM outbox ORDER BY id DESC LIMIT 10')]
+  state['notificationStatus']=[dict(r) for r in c.execute('SELECT id,subject,status,attempts,created,channel FROM outbox ORDER BY id DESC LIMIT 10')]
   for d in state['devices']:
    sample=c.execute('SELECT time,data FROM samples WHERE device=? ORDER BY time DESC LIMIT 1',(d['id'],)).fetchone()
    d.update(cpu=None,memory=None,temp=None,uptime=0,disk=None,lastSeen=None,status='Pending',poe=[],supplies=[])

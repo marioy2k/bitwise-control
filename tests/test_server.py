@@ -146,4 +146,20 @@ class API(unittest.TestCase):
   config={'kind':'printer','host':'printer.local','username':'monitor','supplyThreshold':30}
   self.assertEqual(self.request('/api/integration','POST',{'id':1,'config':config})[0],200)
   with app.connect() as c:self.assertEqual(json.loads(c.execute('SELECT config FROM connections').fetchone()[0])['authPassword'],'auth-secret')
+ def test_dual_delivery_independent_retry_and_redaction(self):
+  self.inventory();settings={'rules':{},'delivery':{'mode':'both','smtpHost':'smtp.example.com','sender':'alerts@example.com','recipient':'admin@example.com','smtpPassword':'smtp-secret','discordUrl':'https://discord.com/api/webhooks/123456/discord-secret'}}
+  self.assertEqual(self.request('/api/monitoring','POST',settings)[0],200);app.record(1,{'cpu':95});app.incidents()
+  def deliver(config,*args):
+   if config['mode']=='email':raise OSError('SMTP unavailable')
+  with patch.object(app.notifications,'send',side_effect=deliver) as send:app.deliver_notifications();self.assertEqual(send.call_count,2)
+  with app.connect() as c:
+   rows={r['channel']:dict(r) for r in c.execute('SELECT * FROM outbox')};self.assertEqual(rows['discord']['status'],'sent');self.assertEqual(rows['email']['status'],'pending');c.execute("UPDATE outbox SET next_attempt=0 WHERE channel='email'")
+  with patch.object(app.notifications,'send') as send:app.deliver_notifications();self.assertEqual(send.call_count,1);self.assertEqual(send.call_args.args[0]['mode'],'email')
+  state=json.dumps(self.request('/api/state')[1]);self.assertNotIn('smtp-secret',state);self.assertNotIn('discord-secret',state)
+ def test_dual_delivery_destination_change_cancels_pending(self):
+  self.inventory();settings={'rules':{},'delivery':{'mode':'both','smtpHost':'smtp.example.com','sender':'alerts@example.com','recipient':'admin@example.com','discordUrl':'https://discord.com/api/webhooks/123456/token'}}
+  self.assertEqual(self.request('/api/monitoring','POST',settings)[0],200);app.record(1,{'cpu':95});app.incidents()
+  self.request('/api/monitoring','POST',{'rules':{},'delivery':{'mode':'none'}})
+  with patch.object(app.notifications,'send') as send:app.deliver_notifications();send.assert_not_called()
+  with app.connect() as c:self.assertEqual(c.execute("SELECT count(*) FROM outbox WHERE status='cancelled'").fetchone()[0],2)
 if __name__=='__main__':unittest.main()

@@ -136,3 +136,9 @@ At or below the threshold, a consumed supply opens a warning naming the supply a
 ### HP SNMP context
 
 Some HP printers require the SNMP context name `Jetdirect` to grant access to their MIB objects. Set **SNMP context name** in the connection form when the device requires a non-default context. The HP Color LaserJet Pro MFP 3303 was verified to return four supplies using `Jetdirect`; an empty context returned `authorizationError`. Other devices can leave this field blank.
+
+## Discord and SMTP email together
+
+In **Settings → Configure monitoring**, choose **Discord + SMTP email** to send each new incident and recovery to both destinations. Discord-only, SMTP-only, and the existing generic HTTPS webhook option remain available. For Discord, create a webhook under the destination text channel’s **Edit Channel → Integrations → Webhooks**, then paste its URL into the app. Enter the SMTP server, port (587 STARTTLS or 465 TLS), username/password, sender, and recipient. All network connections verify TLS.
+
+Discord messages disable mentions and are limited to 2,000 characters. Webhook URLs and SMTP passwords stay hidden in API responses and must never be committed. Each channel has its own delivery status and retries, so an SMTP failure does not resend an already delivered Discord message. As before, a transport failure after acceptance can result in a duplicate on retry. Changing destinations cancels pending deliveries. New settings apply to future incident and recovery events; existing open alerts are not resent.
